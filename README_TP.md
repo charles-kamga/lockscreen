@@ -12,10 +12,10 @@ Utilisation du capteur d'empreinte digitale ou de la reconnaissance faciale.
 4.  **Authentification** : Affichage de la fenêtre système pour le scan. (Fait ✅)
 5.  **Validation** : Déverrouillage de l'interface après succès du scan. (Fait ✅)
 
-### Phase 2 : Déverrouillage Logique (Modulo 7)
+### Phase 2 : Déverrouillage Logique (Modulo 5)
 Méthode de secours basée sur une logique mathématique simple (à implémenter).
 1.  **Calcul** : Utilisation du jour du mois actuel (ex: 12).
-2.  **Logique** : Le code attendu est `jour % 7` (ex: 12 % 7 = 5).
+2.  **Logique** : Le code attendu est `jour % 5` (ex: 49 % 5 = 4).
 3.  **Interface** : Saisie du code via un clavier numérique.
 
 ### Phase 3 : Finalisation de l'Interface
