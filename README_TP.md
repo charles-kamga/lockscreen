@@ -15,7 +15,7 @@ Utilisation du capteur d'empreinte digitale ou de la reconnaissance faciale.
 ### Phase 2 : Déverrouillage Logique (Modulo 5)
 Méthode de secours basée sur une logique mathématique simple (à implémenter).
 1.  **Calcul** : Utilisation du jour du mois actuel (ex: 12).
-2.  **Logique** : Le code attendu est `jour % 5` (ex: 49 % 5 = 4).
+2.  **Logique** : Le code attendu est `jour(au carree) % 5` (ex: 49 % 5 = 4).
 3.  **Interface** : Saisie du code via un clavier numérique.
 
 ### Phase 3 : Finalisation de l'Interface
