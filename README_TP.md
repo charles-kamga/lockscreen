@@ -12,15 +12,16 @@ Utilisation du capteur d'empreinte digitale ou de la reconnaissance faciale.
 4.  **Authentification** : Affichage de la fenêtre système pour le scan. (Fait ✅)
 5.  **Validation** : Déverrouillage de l'interface après succès du scan. (Fait ✅)
 
-### Phase 2 : Déverrouillage Logique (Modulo 5)
-Méthode de secours basée sur une logique mathématique simple (à implémenter).
-1.  **Calcul** : Utilisation du jour du mois actuel (ex: 12).
-2.  **Logique** : Le code attendu est `jour(au carree) % 5` (ex: 49 % 5 = 4).
-3.  **Interface** : Saisie du code via un clavier numérique.
+### Phase 2 : Déverrouillage par Mouvement (Secousse) (Terminé ✅)
+Méthode de secours basée sur l'accéléromètre du téléphone et une logique mathématique.
+1.  **Détection** : Utilisation de `react-native-sensors` pour détecter les secousses physiques du téléphone (accélération > 22 m/s²). (Fait ✅)
+2.  **Calcul (Modulo 5)** : Le nombre de secousses requises dépend du jour de la semaine : `(jour_de_la_semaine²) % 5`. (Fait ✅)
+3.  **Exceptions** : Le vendredi, l'application est en accès libre. Si le calcul donne 0 secousses, le bouton déverrouille l'application directement. (Fait ✅)
 
-### Phase 3 : Finalisation de l'Interface
-- Design de l'écran de garde (Lock Screen).
-- Possibilité de basculer entre l'empreinte et le code.
+### Phase 3 : Interface, Audio & Sécurité (Terminé ✅)
+1.  **Interface** : Design de l'écran de garde (Lock Screen) avec basculement entre biométrie et mouvement. (Fait ✅)
+2.  **Feedback** : Intégration de sons (`react-native-sound`) et de retours haptiques (`Vibration`) pour les succès, échecs et chaque secousse. (Fait ✅)
+3.  **Système Anti-Intrusion** : Blocage total de l'application pendant 60 secondes (avec alarme sonore) après 4 tentatives échouées. (Fait ✅)
 
 ## 🛠️ Instructions pour le Groupe
 
@@ -37,4 +38,4 @@ Puisque l'émulateur n'a pas de capteur physique, utilisez ces commandes :
     adb -e emu fingerprint touch 1
     ```
 
-*Note : Cette version actuelle est un prototype fonctionnel validant la partie biométrique.*
+*Note : Cette version est maintenant un prototype complet et fonctionnel incluant la biométrie, l'accéléromètre, l'audio et la sécurité anti-intrusion.*

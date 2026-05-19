@@ -1,344 +1,133 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-  Alert,
-} from 'react-native';
-import ReactNativeBiometrics, { BiometryTypes } from 'react-native-biometrics';
-import { accelerometer, setUpdateIntervalForType, SensorTypes } from 'react-native-sensors';
-import { map, filter } from 'rxjs/operators';
+import React, { useState, useEffect, useCallback } from 'react';
+import { SafeAreaView, Alert, Vibration } from 'react-native';
+import { useAudio } from './src/hooks/useAudio';
+import { useBiometrics } from './src/hooks/useBiometrics';
+import { useLockout } from './src/hooks/useLockout';
+import { useShakeDetection } from './src/hooks/useShakeDetection';
+import { calculateRequiredShakes } from './src/utils/securityUtils';
+import { MAX_ATTEMPTS } from './src/constants/security';
+import { globalStyles } from './src/styles/globalStyles';
+import LockedView from './src/components/LockedView';
+import UnlockedView from './src/components/UnlockedView';
 
-/**
- * Initialisation du module de biométrie native.
- */
-const rnBiometrics = new ReactNativeBiometrics();
-
-/**
- * PARAMÈTRES DE SENSIBILITÉ DU MOUVEMENT
- * SHAKE_THRESHOLD : Force d'accélération minimale pour détecter une secousse.
- *                   Plus ce chiffre est bas, plus l'app est sensible.
- * SHAKE_TIMEOUT   : Délai en millisecondes entre deux secousses pour éviter
- *                   les doubles comptages accidentels.
- */
-const SHAKE_THRESHOLD = 15;
-const SHAKE_TIMEOUT = 800;
 
 const App = () => {
-  // --- ÉTATS (STATES) ---
+  // --- ÉTATS GLOBAUX ---
+  // Indique si le système est verrouillé (True par défaut)
   const [isLocked, setIsLocked] = useState(true);
-  const [sensorType, setSensorType] = useState<string | null>(null);
-  const [shakeCount, setShakeCount] = useState(0);
-  const [requiredShakes, setRequiredShakes] = useState(0);
-  const [isShakeMode, setIsShakeMode] = useState(false);
-  
-  // Référence pour stocker le timestamp de la dernière secousse
-  const lastShakeTime = useRef(0);
 
-  // --- INITIALISATION ---
-  useEffect(() => {
-    checkBiometrics();
-    calculateShakes();
-    // Configuration de la fréquence de lecture de l'accéléromètre (100ms)
-    setUpdateIntervalForType(SensorTypes.accelerometer, 100);
+  // Nombre de secousses requis calculé pour aujourd'hui
+  const [requiredShakes, setRequiredShakes] = useState(0);
+
+  // --- INITIALISATION DES SERVICES (CUSTOM HOOKS) ---
+
+  // 1. Service Audio (gestion des fichiers mp3)
+  const audio = useAudio();
+
+  // 2. Service Biométrique (capteur d'empreintes / FaceID)
+  const biometrics = useBiometrics();
+
+  // 3. Service de Lockout (brute-force) couplé directement à la sirène d'alarme audio
+  const lockout = useLockout({
+    onAlarmStart: audio.playAlarm, // Lance la sirène en cas de blocage actif
+    onAlarmStop: audio.stopAlarm,  // Arrête la sirène à la fin de la pénalité
+  });
+
+  // --- ACTIONS DE DÉVERROUILLAGE & ACTIONS ---
+
+  /**
+   * Action appelée en cas de déverrouillage réussi (biométrie correcte ou secousses complétées).
+   */
+  const handleSuccess = useCallback(() => {
+    audio.playUnlock(); // Bip de succès
+    Vibration.vibrate([0, 500]); // Vibration longue (500ms)
+
+    // Délais visuel avant transition pour laisser l'utilisateur ressentir le succès
+    setTimeout(() => {
+      setIsLocked(false); // Bascule de l'écran principal
+      lockout.resetAttempts(); // Remise à zéro des compteurs de sécurité
+      Alert.alert('Succès', 'Déverrouillé !');
+    }, 300);
+  }, [audio, lockout]);
+
+  /**
+   * Action appelée en cas d'échec d'authentification.
+   */
+  const handleFailure = useCallback(() => {
+    audio.playError(); // Bip d'erreur
+    Vibration.vibrate([0, 200, 100, 200]); // Vibration brève saccadée
+    lockout.registerFailure(); // Incrémentation de la pénalité de sécurité
+  }, [audio, lockout]);
+
+  // 4. Service de détection de secousses (couplé aux actions Succès / Échec)
+  const shakeDetection = useShakeDetection({
+    isLocked,
+    isLockedOut: !!lockout.lockoutUntil,
+    requiredShakes,
+    onSuccess: handleSuccess,
+    onFailure: handleFailure,
+  });
+
+  /**
+   * Calcule dynamiquement les règles de secousses du jour.
+   */
+  const runCalculateShakes = useCallback(() => {
+    const shakes = calculateRequiredShakes();
+    if (shakes === null) {
+      // Vendredi : accès libre directement
+      setIsLocked(false);
+    } else {
+      setRequiredShakes(shakes);
+    }
   }, []);
 
-  // --- LOGIQUE DE DÉTECTION DU MOUVEMENT ---
+  // Détermine les règles de secousse dès le montage du composant
   useEffect(() => {
-    let subscription: any;
-
-    if (isLocked && isShakeMode) {
-      // Souscription au flux de données de l'accéléromètre
-      subscription = accelerometer
-        .pipe(
-          // Calcul de la norme du vecteur accélération (Force G totale)
-          map(({ x, y, z }) => Math.sqrt(x * x + y * y + z * z)),
-          // On ne garde que les mouvements dépassant notre seuil de sensibilité
-          filter(force => force > SHAKE_THRESHOLD)
-        )
-        .subscribe(force => {
-          const now = Date.now();
-          // Vérification du délai "anti-rebond" (timeout)
-          if (now - lastShakeTime.current > SHAKE_TIMEOUT) {
-            lastShakeTime.current = now;
-            
-            setShakeCount((prev) => {
-              const next = prev + 1;
-              // Si le nombre requis de secousses est atteint
-              if (next >= requiredShakes) {
-                // Petit délai visuel avant le déverrouillage
-                setTimeout(() => {
-                  setIsLocked(false);
-                  setIsShakeMode(false);
-                  Alert.alert('Succès', 'Déverrouillé par mouvement !');
-                }, 300);
-                return next;
-              }
-              return next;
-            });
-          }
-        });
-    }
-
-    // Nettoyage de la souscription lors du démontage du composant
-    return () => {
-      if (subscription) subscription.unsubscribe();
-    };
-  }, [isLocked, isShakeMode, requiredShakes]);
+    runCalculateShakes();
+  }, [runCalculateShakes]);
 
   /**
-   * Calcule le nombre de secousses requis selon la règle mathématique :
-   * Règle : (numéro_du_jour^2) % 5
-   * Lundi = 1, Mardi = 2, ..., Dimanche = 7
-   * Exception : Le Vendredi (5), l'application reste déverrouillée.
+   * Déclenche l'authentification biométrique lors du clic sur le bouton.
    */
-  const calculateShakes = () => {
-    const now = new Date();
-    let day = now.getDay(); // 0 = Dimanche, 1 = Lundi, ...
-    
-    // Ajustement pour faire correspondre Lundi à 1 et Dimanche à 7
-    const adjustedDay = day === 0 ? 7 : day;
-
-    // Gestion de l'exception du Vendredi
-    if (adjustedDay === 5) {
-      setIsLocked(false);
-      return;
-    }
-
-    // Calcul du modulo 5 sur le carré du numéro du jour
-    const shakes = Math.pow(adjustedDay, 2) % 5;
-    setRequiredShakes(shakes);
-  };
+  const handleBiometricTrigger = useCallback(() => {
+    if (lockout.lockoutUntil || biometrics.isBiometricPending) return;
+    biometrics.authenticate(handleSuccess, handleFailure);
+  }, [biometrics, lockout.lockoutUntil, handleSuccess, handleFailure]);
 
   /**
-   * Vérifie la disponibilité des capteurs biométriques sur l'appareil.
+   * Reverrouille l'application de manière propre et sécurisée (réinitialisation complète).
    */
-  const checkBiometrics = async () => {
-    try {
-      const { available, biometryType } = await rnBiometrics.isSensorAvailable();
-      if (available && biometryType === BiometryTypes.Fingerprint) {
-        setSensorType('Empreinte Digitale');
-      } else if (available && biometryType === BiometryTypes.FaceID) {
-        setSensorType('FaceID');
-      } else if (available && biometryType === BiometryTypes.Biometrics) {
-        setSensorType('Biométrie');
-      } else {
-        setSensorType('Non disponible');
-      }
-    } catch (error) {
-      console.error('Erreur lors de la vérification biométrique:', error);
-    }
-  };
+  const handleLock = useCallback(() => {
+    lockout.resetAttempts(); // Remet les tentatives à 0
+    runCalculateShakes();   // Recalcule les règles du jour
+    setIsLocked(true);      // Bascule l'UI sur l'écran verrouillé
+  }, [lockout, runCalculateShakes]);
 
-  /**
-   * Déclenche l'authentification biométrique native (Empreinte/Visage).
-   */
-  const handleBiometricAuth = async () => {
-    try {
-      const { success } = await rnBiometrics.simplePrompt({
-        promptMessage: 'Authentification requise',
-        cancelButtonText: 'Annuler',
-      });
-
-      if (success) {
-        setIsLocked(false);
-        Alert.alert('Succès', 'Déverrouillage réussi !');
-      }
-    } catch (error) {
-      console.error('Erreur d\'authentification:', error);
-    }
-  };
-
-  // --- RENDU : ÉCRAN DE VERROUILLAGE ---
-  if (isLocked) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.lockBox}>
-          <Text style={styles.title}>🔒 Sécurisé</Text>
-          
-          {!isShakeMode ? (
-            // Mode normal : Biométrie
-            <>
-              <Text style={styles.subtitle}>Capteur : {sensorType}</Text>
-              <TouchableOpacity 
-                style={[styles.button, sensorType === 'Non disponible' && styles.buttonDisabled]} 
-                onPress={handleBiometricAuth}
-                disabled={sensorType === 'Non disponible'}
-              >
-                <Text style={styles.buttonText}>UTILISER L'EMPREINTE</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.shakeToggleButton} 
-                onPress={() => setIsShakeMode(true)}
-              >
-                <Text style={styles.shakeToggleText}>UTILISER LE MOUVEMENT</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            // Mode de secours : Secousses
-            <View style={styles.shakeArea}>
-              <Text style={styles.shakeTitle}>Mode Secours</Text>
-              <Text style={styles.shakeInstruction}>
-                Bougez le téléphone fermement
-              </Text>
-              <View style={styles.progressContainer}>
-                <Text style={styles.progressText}>{shakeCount} / {requiredShakes}</Text>
-              </View>
-              <TouchableOpacity 
-                onPress={() => {setIsShakeMode(false); setShakeCount(0);}}
-                style={styles.cancelButton}
-              >
-                <Text style={styles.cancelText}>Retour</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  // --- RENDU : APPLICATION DÉVERROUILLÉE ---
+  // --- RENDU GRAPHIQUE CONDITIONNEL ---
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.contentBox}>
-        <Text style={styles.welcomeText}>🔓 Bienvenue !</Text>
-        <Text style={styles.infoText}>Le système de déverrouillage sécurisé est actif.</Text>
-        
-        <TouchableOpacity style={styles.retryButton} onPress={() => {
-          setShakeCount(0);
-          calculateShakes();
-          setIsLocked(true);
-        }}>
-          <Text style={styles.retryButtonText}>REVERROUILLER L'APP</Text>
-        </TouchableOpacity>
-      </View>
+    <SafeAreaView style={globalStyles.container}>
+      {isLocked ? (
+        // ÉCRAN VERROUILLÉ (Reçoit tous ses états et déclencheurs en props)
+        <LockedView
+          sensorType={biometrics.sensorType}
+          failedAttempts={lockout.failedAttempts}
+          maxAttempts={MAX_ATTEMPTS}
+          lockoutUntil={lockout.lockoutUntil}
+          secondsRemaining={lockout.secondsRemaining}
+          isBiometricPending={biometrics.isBiometricPending}
+          isShakeMode={shakeDetection.isShakeMode}
+          shakeCount={shakeDetection.shakeCount}
+          requiredShakes={requiredShakes}
+          handleBiometricAuth={handleBiometricTrigger}
+          enterShakeMode={shakeDetection.enterShakeMode}
+          exitShakeMode={shakeDetection.exitShakeMode}
+        />
+      ) : (
+        // ÉCRAN D'ACCUEIL DÉVERROUILLÉ
+        <UnlockedView onLock={handleLock} />
+      )}
     </SafeAreaView>
   );
 };
-
-// --- STYLES ---
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-  },
-  lockBox: {
-    padding: 30,
-    backgroundColor: 'white',
-    borderRadius: 25,
-    elevation: 12,
-    width: '85%',
-    alignItems: 'center',
-  },
-  contentBox: {
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    color: '#333',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 30,
-  },
-  button: {
-    backgroundColor: '#4CAF50',
-    padding: 18,
-    borderRadius: 15,
-    width: '100%',
-    alignItems: 'center',
-  },
-  buttonDisabled: {
-    backgroundColor: '#ccc',
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
-    letterSpacing: 1,
-  },
-  shakeToggleButton: {
-    marginTop: 25,
-    padding: 10,
-  },
-  shakeToggleText: {
-    color: '#2196F3',
-    fontSize: 14,
-    fontWeight: '600',
-    textDecorationLine: 'underline',
-  },
-  shakeArea: {
-    alignItems: 'center',
-    width: '100%',
-  },
-  shakeTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#FF9800',
-    marginBottom: 10,
-  },
-  shakeInstruction: {
-    textAlign: 'center',
-    color: '#555',
-    marginBottom: 25,
-    fontSize: 15,
-  },
-  progressContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 6,
-    borderColor: '#FF9800',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 25,
-    backgroundColor: '#FFF3E0',
-  },
-  progressText: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#E65100',
-  },
-  cancelButton: {
-    marginTop: 10,
-  },
-  cancelText: {
-    color: '#999',
-    fontWeight: '500',
-  },
-  welcomeText: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#2E7D32',
-  },
-  infoText: {
-    marginTop: 15,
-    fontSize: 16,
-    color: '#555',
-    textAlign: 'center',
-    paddingHorizontal: 40,
-  },
-  retryButton: {
-    marginTop: 60,
-    paddingVertical: 12,
-    paddingHorizontal: 25,
-    borderWidth: 2,
-    borderColor: '#007AFF',
-    borderRadius: 10,
-  },
-  retryButtonText: {
-    color: '#007AFF',
-    fontWeight: 'bold',
-    fontSize: 14,
-  }
-});
 
 export default App;
